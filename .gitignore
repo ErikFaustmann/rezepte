@@ -1,0 +1,6 @@
+# Lokale Einstellungen und Laufzeitdateien
+config.json
+rezepte.log
+__pycache__/
+*.pyc
+.claude/
