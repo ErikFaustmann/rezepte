@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rezepte">
+  <rect width="64" height="64" rx="14" fill="#c2551f"/>
+  <g fill="none" stroke="#fff6ec" stroke-width="3.5" stroke-linecap="round">
+    <path d="M22 9c-3 3.5 3 6.5 0 10.5"/>
+    <path d="M32 7c-3 3.5 3 6.5 0 10.5"/>
+    <path d="M42 9c-3 3.5 3 6.5 0 10.5"/>
+  </g>
+  <g fill="#fff6ec">
+    <rect x="28" y="22" width="8" height="5" rx="2.5"/>
+    <rect x="11" y="26" width="42" height="4.5" rx="2.25"/>
+    <rect x="7" y="35" width="9" height="4.5" rx="2.25"/>
+    <rect x="48" y="35" width="9" height="4.5" rx="2.25"/>
+    <path d="M14 33h36v12a9 9 0 0 1-9 9H23a9 9 0 0 1-9-9z"/>
+  </g>
+  <path fill="#c2551f" d="M32 49.5l-5.6-5.3a3.3 3.3 0 0 1 5.6-3.6a3.3 3.3 0 0 1 5.6 3.6z"/>
+</svg>
