@@ -4,6 +4,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const app = $("#app");
 let config = { nutzer: "", datenordner: "" };
 const liste = { suche: "", sortierung: "geaendert" };
+let einfuegenOeffnen = false; // nach Teil-Import das Einfügefeld im Formular aufklappen
 
 // ---------------------------------------------------------------- Hilfsfunktionen
 
@@ -46,7 +47,56 @@ function meldung(text, art = "fehler") {
   el.className = `meldung ${art}`;
   el.hidden = false;
   clearTimeout(meldungTimer);
-  meldungTimer = setTimeout(() => (el.hidden = true), art === "fehler" ? 8000 : 4000);
+  meldungTimer = setTimeout(() => (el.hidden = true), art === "ok" ? 4000 : 9000);
+}
+
+// ---------------------------------------------------------------- Rezepttext aufteilen
+
+const KOPF = {
+  zutaten: /^(zutaten|ingredients|einkaufsliste|(das )?(brauchen?|braucht) (man|sie|du|ihr|wir))\b/i,
+  schritte: /^(zubereitung|anleitung|so geht'?s|so wird'?s gemacht|und so geht'?s|method|instructions|directions|preparation)\b/i,
+  notizen: /^(tipps?|hinweise?|notizen?|anmerkungen?|variante[n]?)\b/i,
+};
+const ZUTAT = /^([\d½¼¾⅓⅔⅛]|eine?n?\b|etwas\b|einige\b|wenige?\b|prise\b|1\/2|salz\b|pfeffer\b|öl\b)|\b\d+\s*(g|kg|ml|l|cl|el|tl|stk|stück|prise[n]?|bund|dose[n]?|becher|zehe[n]?|tasse[n]?|pck|päckchen|scheibe[n]?|handvoll|msp)\b/i;
+
+function ohneAufzaehlung(zeile) {
+  return zeile.replace(/^([-–•*·▪]|\(?\d{1,2}[.)]|schritt\s*\d+:?)\s+/i, "").trim();
+}
+
+// Teilt frei eingefügten Text anhand von Überschriften wie „Zutaten“ und „Zubereitung“ auf.
+// Ohne Überschriften wird jede Zeile geraten: kurz mit Mengenangabe = Zutat, sonst Schritt.
+function textZerlegen(text) {
+  const zeilen = text.split(/\r?\n/).map((z) => z.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const teile = { vorne: [], zutaten: [], schritte: [], notizen: [] };
+  let bereich = null;
+  for (const zeile of zeilen) {
+    const kopf = zeile.length <= 60 && Object.keys(KOPF).find((k) => KOPF[k].test(zeile.replace(/[:\s]+$/, "")));
+    if (kopf) {
+      bereich = kopf;
+      // „Zutaten: 200 g Mehl, …“ – Inhalt hinter dem Doppelpunkt behalten
+      const rest = zeile.split(":").slice(1).join(":").trim();
+      if (rest) teile[kopf].push(rest);
+      continue;
+    }
+    if (bereich) teile[bereich].push(zeile);
+    else teile.vorne.push(zeile);
+  }
+
+  const ergebnis = { zutaten: [], schritte: [], notizen: teile.notizen.join("\n") };
+  if (teile.zutaten.length || teile.schritte.length) {
+    ergebnis.zutaten = teile.zutaten.map(ohneAufzaehlung).filter(Boolean);
+    ergebnis.schritte = teile.schritte.map(ohneAufzaehlung).filter(Boolean);
+    // Erste kurze Zeile vor den Überschriften als Titel, der Rest als Beschreibung
+    if (teile.vorne.length && teile.vorne[0].length <= 80) ergebnis.titel = teile.vorne.shift();
+    ergebnis.beschreibung = teile.vorne.join("\n");
+  } else {
+    for (const zeile of teile.vorne) {
+      const z = ohneAufzaehlung(zeile);
+      if (z.length <= 70 && ZUTAT.test(z)) ergebnis.zutaten.push(z);
+      else if (z) ergebnis.schritte.push(z);
+    }
+  }
+  return ergebnis;
 }
 
 function datum(iso) {
@@ -254,6 +304,29 @@ async function zeigeBearbeiten(id) {
       h("button", { type: "submit" }, "Speichern"),
       h("a", { href: id ? `#/rezept/${id}` : "#/", class: "knopf zweitrangig" }, "Abbrechen")));
 
+  const einfuegeText = h("textarea", { rows: 8, placeholder: "Rezepttext hier einfügen (z. B. von einer Webseite kopiert) …" });
+  const aufteilen = () => {
+    const t = textZerlegen(einfuegeText.value);
+    if (!t.zutaten.length && !t.schritte.length) return meldung("Im eingefügten Text wurde nichts gefunden.");
+    const f = formular.elements;
+    if (t.titel && !f.titel.value.trim()) f.titel.value = t.titel;
+    if (t.beschreibung && !f.beschreibung.value.trim()) f.beschreibung.value = t.beschreibung;
+    if (t.zutaten.length) f.zutaten.value = t.zutaten.join("\n");
+    if (t.schritte.length) f.schritte.value = t.schritte.join("\n");
+    if (t.notizen) f.notizen.value = [f.notizen.value.trim(), t.notizen].filter(Boolean).join("\n\n");
+    einfuegen.open = false;
+    meldung(`${t.zutaten.length} Zutaten und ${t.schritte.length} Schritte übernommen. Bitte kurz prüfen, dann speichern.`, "ok");
+    f.zutaten.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  const einfuegen = h("details", { class: "einfuegen", open: einfuegenOeffnen },
+    h("summary", {}, "📋 Rezepttext einfügen und automatisch aufteilen"),
+    h("p", { class: "leise klein" },
+      "Markiere das Rezept auf der Webseite, kopiere es (Strg+C) und füge es hier ein. ",
+      "Überschriften wie „Zutaten“ und „Zubereitung“ helfen beim Aufteilen. Zutaten und Schritte im Formular werden ersetzt."),
+    einfuegeText,
+    h("button", { type: "button", onclick: aufteilen }, "Aufteilen"));
+  einfuegenOeffnen = false;
+
   const zeilen = (s) => s.split("\n").map((z) => z.trim()).filter(Boolean);
   const daten = () => {
     const f = new FormData(formular);
@@ -281,7 +354,8 @@ async function zeigeBearbeiten(id) {
   };
   formular.addEventListener("submit", (e) => { e.preventDefault(); speichern(r.geaendert); });
 
-  app.replaceChildren(h("article", { class: "rezept" }, h("h1", {}, id ? "Rezept bearbeiten" : "Neues Rezept"), formular));
+  app.replaceChildren(h("article", { class: "rezept" }, h("h1", {}, id ? "Rezept bearbeiten" : "Neues Rezept"), einfuegen, formular));
+  if (einfuegen.open) einfuegeText.focus();
 }
 
 // ---------------------------------------------------------------- Start
@@ -322,8 +396,15 @@ $("#import-form").addEventListener("submit", async (e) => {
   try {
     const r = await api("POST", "/api/import", { url: $("#import-url").value });
     $("#import-url").value = "";
-    meldung(`„${r.titel}“ importiert.`, "ok");
-    location.hash = `#/rezept/${r.id}`;
+    if (r.teilweise) {
+      meldung("Auf dieser Seite gibt es keine Rezeptdaten. Titel, Bild und Link sind übernommen – " +
+        "kopiere den Rezepttext von der Seite und füge ihn unten ein.", "hinweis");
+      einfuegenOeffnen = true;
+      location.hash = `#/rezept/${r.id}/bearbeiten`;
+    } else {
+      meldung(`„${r.titel}“ importiert.`, "ok");
+      location.hash = `#/rezept/${r.id}`;
+    }
   } catch (err) {
     meldung(err.message);
   } finally {

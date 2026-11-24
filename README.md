@@ -9,6 +9,11 @@ OneDrive übernimmt den Abgleich zwischen euch beiden.
 - **Import per URL**: Rezept-Adresse einfügen, dann werden Titel, Zutaten, Schritte, Zeit,
   Portionen und Bild übernommen. Das funktioniert bei allen Seiten, die Rezeptdaten im
   schema.org-Format einbetten (Chefkoch, Lecker, EatSmarter, BBC Good Food und die meisten Food-Blogs).
+- **Teil-Import**: Seiten ohne Rezeptdaten (z. B. Zeitungsartikel) werden trotzdem mit Titel,
+  Bild, Kurzbeschreibung und Link angelegt. Danach öffnet sich das Formular zum Ergänzen.
+- **Text einfügen**: Im Bearbeiten-Formular kann kopierter Rezepttext eingefügt werden. Die App
+  teilt ihn anhand von Überschriften wie „Zutaten“ und „Zubereitung“ auf. Ohne Überschriften
+  gelten Zeilen mit Mengenangaben als Zutaten.
 - **Bearbeiten**: alle Felder plus eigene Notizen und Tags
 - **Bewerten**: jeder vergibt eigene Sterne, die Liste zeigt den Durchschnitt
 - **Fotos**: werden vor dem Hochladen auf max. 1600 px verkleinert

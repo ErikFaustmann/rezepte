@@ -271,29 +271,37 @@ class Store:
 
 # ---------------------------------------------------------------- Import von Webseiten
 
-class LdJsonParser(HTMLParser):
-    """Sammelt alle <script type="application/ld+json">-Blöcke und das og:image."""
+class SeitenParser(HTMLParser):
+    """Sammelt alle <script type="application/ld+json">-Blöcke, Meta-Angaben und den <title>."""
 
     def __init__(self):
         super().__init__()
-        self.bloecke, self._puffer, self._aktiv = [], [], False
-        self.og_bild = None
+        self.bloecke, self._puffer, self._aktiv = [], [], None
+        self.meta, self.titel = {}, ""
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "script" and (a.get("type") or "").strip().lower() == "application/ld+json":
-            self._aktiv, self._puffer = True, []
-        elif tag == "meta" and a.get("property") == "og:image" and not self.og_bild:
-            self.og_bild = a.get("content")
+            self._aktiv, self._puffer = "script", []
+        elif tag == "title" and not self.titel:
+            self._aktiv, self._puffer = "title", []
+        elif tag == "meta":
+            name = (a.get("property") or a.get("name") or "").lower()
+            if name in ("og:title", "og:description", "og:image", "description") and a.get("content"):
+                self.meta.setdefault(name, a["content"])
 
     def handle_data(self, data):
         if self._aktiv:
             self._puffer.append(data)
 
     def handle_endtag(self, tag):
-        if tag == "script" and self._aktiv:
-            self._aktiv = False
+        if tag == self._aktiv == "script":
             self.bloecke.append("".join(self._puffer))
+        elif tag == self._aktiv == "title":
+            self.titel = "".join(self._puffer)
+        else:
+            return
+        self._aktiv = None
 
 
 def lade_url(url, limit):
@@ -384,12 +392,24 @@ def sammle_ids(knoten, index):
             sammle_ids(x, index)
 
 
+def teil_import(url, parser):
+    """Für Seiten ohne Rezeptdaten: nur Titel, Beschreibung und Bild übernehmen."""
+    titel = html_text(parser.meta.get("og:title") or parser.titel)
+    if not titel:
+        raise ApiError(422, "Auf dieser Seite wurden keine Rezeptdaten gefunden. "
+                            "Lege das Rezept über „+ Neu“ von Hand an.")
+    beschreibung = html_text(parser.meta.get("og:description") or parser.meta.get("description"))
+    return {"titel": titel, "quelle": url, "beschreibung": beschreibung}
+
+
 def importiere(url):
+    """Liefert (Rezeptdaten, Bild-URLs, teilweise). teilweise=True heißt: keine Rezeptdaten gefunden."""
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
         raise ApiError(400, "Bitte eine http(s)-Adresse angeben")
     daten, charset = lade_url(url, MAX_SEITE)
-    parser = LdJsonParser()
+    parser = SeitenParser()
     parser.feed(daten.decode(charset, errors="replace"))
+    og_bild = parser.meta.get("og:image")
 
     knoten = []
     for block in parser.bloecke:
@@ -399,8 +419,7 @@ def importiere(url):
             continue
     rezept = finde_rezept(knoten)
     if not rezept:
-        raise ApiError(422, "Auf dieser Seite wurden keine Rezeptdaten gefunden. "
-                            "Lege das Rezept über „+ Neu“ von Hand an.")
+        return teil_import(url, parser), [og_bild] if og_bild else [], True
 
     zeit = minuten_aus(rezept.get("totalTime")) or (
         minuten_aus(rezept.get("prepTime")) + minuten_aus(rezept.get("cookTime")))
@@ -424,7 +443,7 @@ def importiere(url):
         "zutaten": [html_text(z) for z in rezept.get("recipeIngredient") or [] if html_text(z)],
         "schritte": schritte_aus(rezept.get("recipeInstructions")),
         "tags": tags,
-    }, [u for u in (erstes(rezept.get("image"), index), parser.og_bild) if u]
+    }, [u for u in (erstes(rezept.get("image"), index), og_bild) if u], False
 
 
 def lade_bild(url, basis):
@@ -540,14 +559,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def rezept_import(self):
         url = text(self.body().get("url"), 2000)
-        daten, bild_urls = importiere(url)
+        daten, bild_urls, teilweise = importiere(url)
         r = self.store.neu(daten, self.nutzer)
         for bild_url in bild_urls:
             bild = lade_bild(bild_url, url)
             if bild:
                 r = self.store.foto_hinzu(r["id"], bild)
                 break
-        self.sende_json(r, 201)
+        self.sende_json({**r, "teilweise": teilweise}, 201)
 
     def rezept(self, rid):
         self.sende_json(self.store.lies(rid))
