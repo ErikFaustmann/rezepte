@@ -109,7 +109,12 @@ def bereinige(d):
         "schritte": textliste(d.get("schritte"), 5000),
         "tags": textliste(d.get("tags"), 50),
         "notizen": text(d.get("notizen")),
+        "videos": [v for v in textliste(d.get("videos")) if ist_weblink(v)][:10],
     }
+
+
+def ist_weblink(url):
+    return urllib.parse.urlparse(url).scheme in ("http", "https")
 
 
 def slug(titel):
@@ -381,6 +386,19 @@ def erstes(v, index=None):
     return v
 
 
+def videos_aus(v, index):
+    """Video-Links aus schema.org VideoObject(s): bevorzugt die Einbettungs-Adresse."""
+    videos = []
+    for video in (v if isinstance(v, list) else [v]):
+        if isinstance(video, dict) and not (video.get("embedUrl") or video.get("contentUrl")):
+            video = index.get(video.get("@id"), video)
+        if isinstance(video, dict):
+            video = video.get("embedUrl") or video.get("contentUrl") or video.get("url")
+        if isinstance(video, str) and ist_weblink(video) and video not in videos:
+            videos.append(video)
+    return videos
+
+
 def sammle_ids(knoten, index):
     if isinstance(knoten, list):
         for x in knoten:
@@ -399,7 +417,9 @@ def teil_import(url, parser):
         raise ApiError(422, "Auf dieser Seite wurden keine Rezeptdaten gefunden. "
                             "Lege das Rezept über „+ Neu“ von Hand an.")
     beschreibung = html_text(parser.meta.get("og:description") or parser.meta.get("description"))
-    return {"titel": titel, "quelle": url, "beschreibung": beschreibung}
+    host = urllib.parse.urlparse(url).hostname or ""
+    videos = [url] if re.search(r"(^|\.)(youtube\.com|youtu\.be|vimeo\.com)$", host) else []
+    return {"titel": titel, "quelle": url, "beschreibung": beschreibung, "videos": videos}
 
 
 def importiere(url):
@@ -443,6 +463,7 @@ def importiere(url):
         "zutaten": [html_text(z) for z in rezept.get("recipeIngredient") or [] if html_text(z)],
         "schritte": schritte_aus(rezept.get("recipeInstructions")),
         "tags": tags,
+        "videos": videos_aus(rezept.get("video"), index),
     }, [u for u in (erstes(rezept.get("image"), index), og_bild) if u], False
 
 

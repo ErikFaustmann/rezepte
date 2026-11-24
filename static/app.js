@@ -128,6 +128,61 @@ function istWebLink(url) {
   try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; }
 }
 
+// ---------------------------------------------------------------- Videos
+
+// „1m30s“, „90s“ oder „90“ → Sekunden
+function sekunden(t) {
+  const m = String(t || "").match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+  return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
+}
+
+// Erkennt YouTube-, Vimeo- und direkte Videodatei-Links. Alles andere wird nur verlinkt.
+function videoQuelle(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const host = u.hostname.replace(/^(www\.|m\.)/, "");
+  if (["youtube.com", "youtube-nocookie.com", "youtu.be"].includes(host)) {
+    const id = host === "youtu.be"
+      ? u.pathname.slice(1)
+      : u.searchParams.get("v") || (u.pathname.match(/^\/(embed|shorts|live)\/([\w-]+)/) || [])[2];
+    if (!/^[\w-]{11}$/.test(id || "")) return null;
+    const start = sekunden(u.searchParams.get("t") || u.searchParams.get("start"));
+    return {
+      art: "iframe", anbieter: "YouTube", hochkant: u.pathname.startsWith("/shorts/"),
+      src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1${start ? "&start=" + start : ""}`,
+    };
+  }
+  if (host === "vimeo.com" || host === "player.vimeo.com") {
+    const id = (u.pathname.match(/(\d{5,})/) || [])[1];
+    return id ? { art: "iframe", anbieter: "Vimeo", src: `https://player.vimeo.com/video/${id}?autoplay=1` } : null;
+  }
+  if (/\.(mp4|webm|mov)$/i.test(u.pathname)) return { art: "datei", anbieter: host, src: u.href };
+  return null;
+}
+
+// Eingebettete Videos laden erst beim Klick – vorher wird keine Verbindung zum Anbieter aufgebaut.
+function videoBlock(url) {
+  const q = istWebLink(url) ? videoQuelle(url) : null;
+  if (!q) {
+    return istWebLink(url)
+      ? h("a", { class: "video-link", href: url, target: "_blank", rel: "noopener noreferrer" }, "🎬 " + url)
+      : null;
+  }
+  const box = h("div", { class: "video" + (q.hochkant ? " hochkant" : "") });
+  const laden = () => box.replaceChildren(q.art === "datei"
+    ? h("video", { src: q.src, controls: true, autoplay: true, preload: "metadata" })
+    : h("iframe", {
+      src: q.src, title: `${q.anbieter}-Video`, allowfullscreen: true,
+      allow: "autoplay; encrypted-media; picture-in-picture; fullscreen",
+      referrerpolicy: "strict-origin-when-cross-origin",
+    }));
+  box.append(h("button", { type: "button", class: "video-start", onclick: laden },
+    h("span", { class: "play" }, "▶"),
+    h("span", {}, `Video abspielen (${q.anbieter})`),
+    h("span", { class: "klein" }, "Erst beim Klick wird eine Verbindung zum Anbieter aufgebaut.")));
+  return box;
+}
+
 // Fotos vor dem Hochladen verkleinern, damit OneDrive nicht vollläuft.
 async function fotoVorbereiten(datei, max = 1600) {
   const bild = await createImageBitmap(datei);
@@ -276,6 +331,9 @@ async function zeigeRezept(id) {
       h("section", {}, h("h2", {}, "Zubereitung"),
         r.schritte?.length ? h("ol", { class: "schritte" }, r.schritte.map((s) => h("li", {}, s))) : h("p", { class: "leise" }, "Keine Schritte eingetragen."))),
 
+    r.videos?.length ? h("section", { class: "videos" }, h("h2", {}, r.videos.length > 1 ? "Videos" : "Video"),
+      r.videos.map(videoBlock)) : null,
+
     r.notizen ? h("section", { class: "notizen" }, h("h2", {}, "Notizen"), h("p", {}, r.notizen)) : null,
 
     h("p", { class: "leise klein" },
@@ -300,6 +358,8 @@ async function zeigeBearbeiten(id) {
     bereich("zutaten", "Zutaten", (r.zutaten || []).join("\n"), "eine Zutat pro Zeile", 10),
     bereich("schritte", "Zubereitung", (r.schritte || []).join("\n"), "ein Schritt pro Zeile", 12),
     bereich("notizen", "Notizen", r.notizen, "z. B. eigene Anpassungen, Tipps", 4),
+    bereich("videos", "Videos", (r.videos || []).join("\n"),
+      "ein Link pro Zeile – YouTube und Vimeo werden eingebettet, andere Links verlinkt", 2),
     h("div", { class: "aktionen" },
       h("button", { type: "submit" }, "Speichern"),
       h("a", { href: id ? `#/rezept/${id}` : "#/", class: "knopf zweitrangig" }, "Abbrechen")));
@@ -335,6 +395,7 @@ async function zeigeBearbeiten(id) {
       quelle: f.get("quelle"), beschreibung: f.get("beschreibung"), notizen: f.get("notizen"),
       tags: f.get("tags").split(",").map((t) => t.trim()).filter(Boolean),
       zutaten: zeilen(f.get("zutaten")), schritte: zeilen(f.get("schritte")),
+      videos: zeilen(f.get("videos")),
     };
   };
 

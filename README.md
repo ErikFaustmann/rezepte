@@ -15,6 +15,11 @@ OneDrive übernimmt den Abgleich zwischen euch beiden.
   teilt ihn anhand von Überschriften wie „Zutaten“ und „Zubereitung“ auf. Ohne Überschriften
   gelten Zeilen mit Mengenangaben als Zutaten.
 - **Bearbeiten**: alle Felder plus eigene Notizen und Tags
+- **Videos**: YouTube- (auch Shorts und Links mit Startzeit) und Vimeo-Links werden eingebettet,
+  direkte Videodateien (.mp4, .webm) abgespielt, andere Links (z. B. Instagram) verlinkt.
+  Ein Video lädt erst beim Klick, vorher wird keine Verbindung zu YouTube oder Vimeo aufgebaut.
+  Beim Import werden Rezeptvideos der Seite mit übernommen, und eine importierte
+  YouTube- oder Vimeo-Adresse landet direkt als Video im Rezept.
 - **Bewerten**: jeder vergibt eigene Sterne, die Liste zeigt den Durchschnitt
 - **Fotos**: werden vor dem Hochladen auf max. 1600 px verkleinert
 - **Suche und Sortierung**: nach Titel, Zutat, Tag, Bewertung oder Datum
