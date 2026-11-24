@@ -20,6 +20,10 @@ OneDrive übernimmt den Abgleich zwischen euch beiden.
   Ein Video lädt erst beim Klick, vorher wird keine Verbindung zu YouTube oder Vimeo aufgebaut.
   Beim Import werden Rezeptvideos der Seite mit übernommen, und eine importierte
   YouTube- oder Vimeo-Adresse landet direkt als Video im Rezept.
+- **Eigene Videos**: Über „+ Video“ lassen sich Videodateien (MP4, MOV, WebM, max. 1 GB) vom
+  Rechner hochladen. Sie liegen im Unterordner `videos` und werden wie alles andere über OneDrive
+  geteilt. Achtung: Videos sind groß, und der kostenlose OneDrive-Speicher hat nur 5 GB.
+  iPhone-Videos (HEVC) spielt nicht jeder Browser ab; dann zeigt die App einen Download-Link.
 - **Bewerten**: jeder vergibt eigene Sterne, die Liste zeigt den Durchschnitt
 - **Fotos**: werden vor dem Hochladen auf max. 1600 px verkleinert
 - **Suche und Sortierung**: nach Titel, Zutat, Tag, Bewertung oder Datum
@@ -79,6 +83,8 @@ Rezepte/                    ← geteilter OneDrive-Ordner
   thai-curry-91bc.json
   fotos/
     lasagne-bolognese-3f2a-a81c0e.jpg
+  videos/
+    lasagne-bolognese-3f2a-7d02b1.mp4
   _papierkorb/
 ```
 

@@ -40,6 +40,25 @@ async function api(methode, pfad, body) {
   return daten;
 }
 
+// Lädt eine Datei als Rohdaten hoch. XMLHttpRequest statt fetch, weil nur so der Fortschritt messbar ist.
+function hochladen(pfad, datei, beiFortschritt) {
+  return new Promise((ok, fehler) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", pfad);
+    xhr.setRequestHeader("X-Rezepte", "1");
+    xhr.setRequestHeader("Content-Type", datei.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => e.lengthComputable && beiFortschritt(e.loaded / e.total);
+    xhr.onload = () => {
+      let daten = {};
+      try { daten = JSON.parse(xhr.responseText); } catch { /* keine JSON-Antwort */ }
+      if (xhr.status < 300) ok(daten);
+      else fehler(Object.assign(new Error(daten.fehler || `Fehler ${xhr.status}`), { status: xhr.status }));
+    };
+    xhr.onerror = () => fehler(new Error("Upload fehlgeschlagen – läuft die App noch?"));
+    xhr.send(datei);
+  });
+}
+
 let meldungTimer;
 function meldung(text, art = "fehler") {
   const el = $("#meldung");
@@ -183,6 +202,21 @@ function videoBlock(url) {
   return box;
 }
 
+// Eigenes Video aus dem Ordner „videos“; kann der Browser das Format nicht, gibt es einen Download-Link.
+function lokalesVideo(name, beiLoeschen) {
+  const box = h("figure", { class: "video lokal" });
+  const weg = h("button", { class: "foto-weg", title: "Video entfernen", onclick: beiLoeschen }, "×");
+  const video = h("video", { src: `/videos/${name}`, controls: true, preload: "metadata", playsinline: true });
+  video.addEventListener("error", () => box.replaceChildren(
+    h("p", { class: "video-fehler" },
+      "Dieses Videoformat kann der Browser nicht abspielen. ",
+      h("a", { href: `/videos/${name}`, download: name }, "Datei herunterladen"),
+      " oder im Datenordner unter „videos“ öffnen."),
+    weg));
+  box.append(video, weg);
+  return box;
+}
+
 // Fotos vor dem Hochladen verkleinern, damit OneDrive nicht vollläuft.
 async function fotoVorbereiten(datei, max = 1600) {
   const bild = await createImageBitmap(datei);
@@ -298,6 +332,41 @@ async function zeigeRezept(id) {
     } catch (e) { meldung(e.message); }
   };
 
+  const videoKnopf = h("button", {
+    class: "foto-neu", onclick: () => videoInput.click(),
+    title: `MP4, MOV oder WebM, max. ${config.max_video_mb} MB. Videos liegen im OneDrive-Ordner und zählen zu eurem Speicherplatz.`,
+  }, "+ Video");
+  const videoInput = h("input", {
+    type: "file", accept: "video/mp4,video/webm,video/quicktime,.mp4,.m4v,.mov,.webm", hidden: true,
+    onchange: async (e) => {
+      const datei = e.target.files[0];
+      if (!datei) return;
+      if (datei.size > config.max_video_mb * 1024 * 1024) {
+        return meldung(`„${datei.name}“ ist zu groß (max. ${config.max_video_mb} MB).`);
+      }
+      videoKnopf.disabled = true;
+      try {
+        await hochladen(`/api/rezepte/${id}/videos`, datei,
+          (anteil) => (videoKnopf.textContent = `Lädt … ${Math.round(anteil * 100)} %`));
+        meldung("Video hinzugefügt.", "ok");
+        zeigeRezept(id);
+      } catch (err) {
+        meldung(`${datei.name}: ${err.message}`);
+        videoKnopf.disabled = false;
+        videoKnopf.textContent = "+ Video";
+      }
+    },
+  });
+
+  const videoLoeschen = async (name) => {
+    if (!confirm("Video entfernen?\nEs wird in den Ordner _papierkorb verschoben.")) return;
+    try {
+      await api("DELETE", `/api/rezepte/${id}/videos/${name}`);
+      zeigeRezept(id);
+    } catch (e) { meldung(e.message); }
+  };
+  const anzahlVideos = (r.video_dateien?.length || 0) + (r.videos?.length || 0);
+
   app.replaceChildren(h("article", { class: "rezept" },
     h("div", { class: "rezept-kopf" },
       h("div", {},
@@ -321,7 +390,8 @@ async function zeigeRezept(id) {
         h("a", { href: `/fotos/${f}`, target: "_blank" }, h("img", { src: `/fotos/${f}`, alt: "" })),
         h("button", { class: "foto-weg", title: "Foto entfernen", onclick: () => fotoLoeschen(f) }, "×"))),
       h("button", { class: "foto-neu", onclick: () => fotoInput.click() }, "+ Foto"),
-      fotoInput),
+      videoKnopf,
+      fotoInput, videoInput),
 
     r.beschreibung ? h("p", { class: "beschreibung" }, r.beschreibung) : null,
 
@@ -331,8 +401,9 @@ async function zeigeRezept(id) {
       h("section", {}, h("h2", {}, "Zubereitung"),
         r.schritte?.length ? h("ol", { class: "schritte" }, r.schritte.map((s) => h("li", {}, s))) : h("p", { class: "leise" }, "Keine Schritte eingetragen."))),
 
-    r.videos?.length ? h("section", { class: "videos" }, h("h2", {}, r.videos.length > 1 ? "Videos" : "Video"),
-      r.videos.map(videoBlock)) : null,
+    anzahlVideos ? h("section", { class: "videos" }, h("h2", {}, anzahlVideos > 1 ? "Videos" : "Video"),
+      (r.video_dateien || []).map((name) => lokalesVideo(name, () => videoLoeschen(name))),
+      (r.videos || []).map(videoBlock)) : null,
 
     r.notizen ? h("section", { class: "notizen" }, h("h2", {}, "Notizen"), h("p", {}, r.notizen)) : null,
 

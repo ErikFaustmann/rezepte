@@ -4,7 +4,8 @@ Start:   py app.py                 (öffnet http://127.0.0.1:8642 im Browser)
 Optionen: --ordner PFAD           anderen Datenordner verwenden (z. B. zum Testen)
           --no-browser            Browser nicht automatisch öffnen
 
-Jedes Rezept ist eine JSON-Datei im Datenordner, Fotos liegen im Unterordner "fotos".
+Jedes Rezept ist eine JSON-Datei im Datenordner, Fotos und Videos liegen in den
+Unterordnern "fotos" und "videos".
 Nur die Python-Standardbibliothek wird benötigt.
 """
 import base64
@@ -16,6 +17,7 @@ import re
 import secrets
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -35,8 +37,11 @@ HOST, PORT = "127.0.0.1", 8642
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 FOTO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,100}\.(jpg|png|webp)$")
+VIDEO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,100}\.(mp4|mov|webm)$")
 MAX_BODY = 25 * 1024 * 1024
 MAX_FOTO = 15 * 1024 * 1024
+MAX_VIDEO = 1024 * 1024 * 1024
+BLOCK = 1024 * 1024
 MAX_SEITE = 8 * 1024 * 1024
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
@@ -47,6 +52,7 @@ STATIC_FILES = {
     "logo.svg": "image/svg+xml",
 }
 FOTO_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+VIDEO_TYPES = {"mp4": "video/mp4", "mov": "video/quicktime", "webm": "video/webm"}
 
 
 class ApiError(Exception):
@@ -134,12 +140,23 @@ def foto_endung(daten):
     return None
 
 
+def video_endung(kopf):
+    """Erkennt das Videoformat an den ersten 12 Bytes."""
+    if kopf[4:8] == b"ftyp":
+        return "mov" if kopf[8:12] == b"qt  " else "mp4"
+    if kopf[:4] == b"\x1a\x45\xdf\xa3":
+        return "webm"
+    return None
+
+
 class Store:
     def __init__(self, ordner):
         self.dir = Path(ordner)
         self.fotos = self.dir / "fotos"
+        self.videos = self.dir / "videos"
         self.papierkorb = self.dir / "_papierkorb"
         self.fotos.mkdir(parents=True, exist_ok=True)
+        self.videos.mkdir(exist_ok=True)
         self.lock = threading.Lock()
 
     def pfad(self, rid):
@@ -209,7 +226,7 @@ class Store:
         return r
 
     def speichere(self, rid, daten, basis, nutzer):
-        """Speichert Textfelder. Bewertungen und Fotos bleiben wie in der Datei."""
+        """Speichert Textfelder. Bewertungen, Fotos und Videodateien bleiben wie in der Datei."""
         with self.lock:
             aktuell = self.lies(rid)
             if basis and aktuell.get("geaendert") != basis:
@@ -238,9 +255,11 @@ class Store:
     def loesche(self, rid):
         with self.lock:
             r = self.lies(rid)
-            for f in r.get("fotos", []):
-                if FOTO_RE.match(f) and (self.fotos / f).exists():
-                    self.in_papierkorb(self.fotos / f)
+            for feld, ordner, muster in (("fotos", self.fotos, FOTO_RE),
+                                         ("video_dateien", self.videos, VIDEO_RE)):
+                for f in r.get(feld, []):
+                    if muster.match(f) and (ordner / f).exists():
+                        self.in_papierkorb(ordner / f)
             self.in_papierkorb(self.pfad(rid))
 
     def foto_hinzu(self, rid, daten):
@@ -257,14 +276,52 @@ class Store:
             self.schreibe(rid, r)
             return r
 
-    def foto_weg(self, rid, name):
+    def video_hinzu(self, rid, quelle, laenge):
+        """Liest ein Video blockweise aus `quelle` in eine Temp-Datei und verschiebt es dann."""
+        if laenge > MAX_VIDEO:
+            raise ApiError(413, f"Video ist zu groß (max. {MAX_VIDEO // 1024 ** 2} MB)")
+        self.lies(rid)  # 404, bevor die Datei übertragen wird
+        kopf = quelle.read(min(12, laenge))
+        endung = video_endung(kopf)
+        if not endung:
+            raise ApiError(400, "Nur MP4-, MOV- oder WebM-Videos werden unterstützt")
+        # Temp-Datei außerhalb von OneDrive, damit keine halben Uploads synchronisiert werden
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".part") as tmp:
+            try:
+                tmp.write(kopf)
+                rest = laenge - len(kopf)
+                while rest > 0:
+                    block = quelle.read(min(BLOCK, rest))
+                    if not block:
+                        raise ApiError(400, "Upload abgebrochen")
+                    tmp.write(block)
+                    rest -= len(block)
+            except BaseException:
+                tmp.close()
+                os.unlink(tmp.name)
+                raise
+        name = f"{rid}-{secrets.token_hex(3)}.{endung}"
+        shutil.move(tmp.name, self.videos / name)
         with self.lock:
             r = self.lies(rid)
-            if name not in r.get("fotos", []):
-                raise ApiError(404, "Foto nicht gefunden")
-            r["fotos"].remove(name)
-            if (self.fotos / name).exists():
-                self.in_papierkorb(self.fotos / name)
+            r.setdefault("video_dateien", []).append(name)
+            self.schreibe(rid, r)
+            return r
+
+    def foto_weg(self, rid, name):
+        return self._datei_weg(rid, "fotos", self.fotos, name)
+
+    def video_weg(self, rid, name):
+        return self._datei_weg(rid, "video_dateien", self.videos, name)
+
+    def _datei_weg(self, rid, feld, ordner, name):
+        with self.lock:
+            r = self.lies(rid)
+            if name not in r.get(feld, []):
+                raise ApiError(404, "Datei nicht gefunden")
+            r[feld].remove(name)
+            if (ordner / name).exists():
+                self.in_papierkorb(ordner / name)
             self.schreibe(rid, r)
             return r
 
@@ -272,6 +329,11 @@ class Store:
         if not FOTO_RE.match(name) or not (self.fotos / name).exists():
             raise ApiError(404, "Foto nicht gefunden")
         return self.fotos / name
+
+    def video_pfad(self, name):
+        if not VIDEO_RE.match(name) or not (self.videos / name).exists():
+            raise ApiError(404, "Video nicht gefunden")
+        return self.videos / name
 
 
 # ---------------------------------------------------------------- Import von Webseiten
@@ -524,6 +586,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "Nicht gefunden")
         except ApiError as e:
             self.sende_json({"fehler": e.text}, e.status)
+        except ConnectionError:
+            pass  # Browser hat die Verbindung beendet, z. B. beim Vorspulen eines Videos
         except Exception as e:  # noqa: BLE001 – Fehler als JSON an die Oberfläche melden
             self.log_error("Fehler: %r", e)
             self.sende_json({"fehler": f"Interner Fehler: {e}"}, 500)
@@ -561,8 +625,46 @@ class Handler(BaseHTTPRequestHandler):
         p = self.store.foto_pfad(name)
         self.sende(p.read_bytes(), FOTO_TYPES[p.suffix[1:]])
 
+    def video(self, name):
+        """Liefert ein Video aus, mit Range-Unterstützung, damit der Browser spulen kann."""
+        p = self.store.video_pfad(name)
+        groesse = p.stat().st_size
+        start, ende, status = 0, groesse - 1, 200
+        bereich = re.fullmatch(r"bytes=(\d*)-(\d*)", (self.headers.get("Range") or "").strip())
+        if bereich and (bereich[1] or bereich[2]):
+            if bereich[1]:
+                start = int(bereich[1])
+                ende = min(int(bereich[2]), groesse - 1) if bereich[2] else groesse - 1
+            else:
+                start = max(0, groesse - int(bereich[2]))
+            if start >= groesse or start > ende:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{groesse}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", VIDEO_TYPES[p.suffix[1:]])
+        self.send_header("Content-Length", str(ende - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{ende}/{groesse}")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        with open(p, "rb") as f:
+            f.seek(start)
+            rest = ende - start + 1
+            while rest > 0:
+                block = f.read(min(BLOCK, rest))
+                if not block:
+                    break
+                self.wfile.write(block)
+                rest -= len(block)
+
     def config_lesen(self):
-        self.sende_json({"nutzer": self.nutzer, "datenordner": str(self.store.dir)})
+        self.sende_json({"nutzer": self.nutzer, "datenordner": str(self.store.dir),
+                         "max_video_mb": MAX_VIDEO // 1024 ** 2})
 
     def config_schreiben(self):
         name = text(self.body().get("nutzer"), 50)
@@ -619,6 +721,15 @@ class Handler(BaseHTTPRequestHandler):
     def foto_loeschen(self, rid, name):
         self.sende_json(self.store.foto_weg(rid, name))
 
+    def video_hochladen(self, rid):
+        laenge = int(self.headers.get("Content-Length") or 0)
+        if laenge <= 0:
+            raise ApiError(400, "Leere Datei")
+        self.sende_json(self.store.video_hinzu(rid, self.rfile, laenge), 201)
+
+    def video_loeschen(self, rid, name):
+        self.sende_json(self.store.video_weg(rid, name))
+
 
 RID = r"([a-z0-9][a-z0-9-]*)"
 ROUTEN = [
@@ -636,6 +747,9 @@ ROUTEN = [
     ("PUT", rf"/api/rezepte/{RID}/bewertung", Handler.bewertung),
     ("POST", rf"/api/rezepte/{RID}/fotos", Handler.foto_hochladen),
     ("DELETE", rf"/api/rezepte/{RID}/fotos/([\w.-]+)", Handler.foto_loeschen),
+    ("GET", r"/videos/([\w.-]+)", Handler.video),
+    ("POST", rf"/api/rezepte/{RID}/videos", Handler.video_hochladen),
+    ("DELETE", rf"/api/rezepte/{RID}/videos/([\w.-]+)", Handler.video_loeschen),
 ]
 
 
